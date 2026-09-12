@@ -208,6 +208,8 @@ export default function App() {
           shirts: shirts.map((s) => ({ id: s.id, tags: s.tags })),
           pants: pants.map((p) => ({ id: p.id, tags: p.tags })),
           styleRequest,
+          excludeShirtId: outfit?.shirt?.id,
+          excludePantsId: outfit?.pants?.id,
         }),
       });
 

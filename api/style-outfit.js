@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Server is missing GEMINI_API_KEY" });
   }
 
-  const { shirts, pants, styleRequest } = req.body || {};
+  const { shirts, pants, styleRequest, excludeShirtId, excludePantsId } = req.body || {};
   if (!Array.isArray(shirts) || !Array.isArray(pants) || shirts.length === 0 || pants.length === 0) {
     return res.status(400).json({ error: "Need at least one tagged shirt and one tagged pants" });
   }
@@ -20,9 +20,14 @@ export default async function handler(req, res) {
     (styleRequest && styleRequest.trim()
       ? `The client's request for this outfit is: "${styleRequest.trim()}". `
       : "The client has not specified an occasion, so pick a versatile, well-coordinated combo. ") +
+    (excludeShirtId || excludePantsId
+      ? `The client already saw this pairing and wants a different one this time: shirt id "${excludeShirtId}" with pants id "${excludePantsId}". Pick a genuinely different combination if the wardrobe allows it. `
+      : "") +
     "Consider color harmony, pattern clash, formality match, and fit balance (e.g. don't pair " +
     "an oversized top with baggy pants unless that's clearly the intended look). Look at ALL " +
-    "items provided, not just the first ones, before deciding. " +
+    "items provided, not just the first ones, before deciding. If multiple pairings would work " +
+    "well, pick among the good options rather than always defaulting to the single most obvious " +
+    "one. " +
     "Respond with ONLY a JSON object, no markdown fences, no preamble, in this exact shape: " +
     '{"shirtId":"<id of chosen shirt>","pantsId":"<id of chosen pants>","reasoning":"one or two sentences explaining why this pairing works for the request"}' +
     "\n\nShirts:\n" +
@@ -39,6 +44,7 @@ export default async function handler(req, res) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 1.0 },
         }),
       }
     );
