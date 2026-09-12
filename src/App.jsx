@@ -16,6 +16,9 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [outfit, setOutfit] = useState(null);
   const [outfitMsg, setOutfitMsg] = useState("");
+  const [outfitReasoning, setOutfitReasoning] = useState("");
+  const [styleRequest, setStyleRequest] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
   const [renderStatus, setRenderStatus] = useState("");
   const [renderedImg, setRenderedImg] = useState(null);
@@ -183,7 +186,7 @@ export default function App() {
     handleFiles(e.dataTransfer.files);
   };
 
-  const generateOutfit = () => {
+  const generateOutfit = async () => {
     const shirts = items.filter((i) => i.status === "done" && i.tags?.type === "shirt");
     const pants = items.filter((i) => i.status === "done" && i.tags?.type === "pants");
 
@@ -193,58 +196,83 @@ export default function App() {
       return;
     }
 
-    const matches = [];
-    for (const s of shirts) {
-      for (const p of pants) {
-        if (s.tags.formality === p.tags.formality) matches.push([s, p]);
-      }
-    }
-
-    const pool = matches.length > 0 ? matches : [[shirts[0], pants[0]]];
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-
-    setOutfit({ shirt: pick[0], pants: pick[1] });
-    setOutfitMsg(
-      matches.length > 0
-        ? ""
-        : "No formality-matched pair found, showing a fallback combo."
-    );
-  };
-
-  const renderOutfitOnMannequin = async () => {
-    if (!outfit) return;
-
-    setRenderStatus("Generating render…");
-    setRenderedImg(null);
+    setGenerating(true);
+    setOutfitMsg("");
+    setOutfitReasoning("");
 
     try {
-      const shirtBase64 = outfit.shirt.dataUrl.split(",")[1];
-      const pantsBase64 = outfit.pants.dataUrl.split(",")[1];
-      const shirtMime = outfit.shirt.dataUrl.match(/data:(.*);base64/)[1];
-      const pantsMime = outfit.pants.dataUrl.match(/data:(.*);base64/)[1];
-
-      const response = await fetch("/api/render-outfit", {
+      const response = await fetch("/api/style-outfit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          shirt: { mime: shirtMime, data: shirtBase64 },
-          pants: { mime: pantsMime, data: pantsBase64 },
+          shirts: shirts.map((s) => ({ id: s.id, tags: s.tags })),
+          pants: pants.map((p) => ({ id: p.id, tags: p.tags })),
+          styleRequest,
         }),
       });
 
       if (!response.ok) {
         const errText = await response.text();
-        throw new Error(`Render failed (${response.status}): ${errText.slice(0, 200)}`);
+        throw new Error(`Styling failed (${response.status}): ${errText.slice(0, 200)}`);
       }
 
       const data = await response.json();
-      if (!data.image) throw new Error("No image returned");
+      const shirt = shirts.find((s) => s.id === data.shirtId);
+      const pantsPick = pants.find((p) => p.id === data.pantsId);
 
-      setRenderedImg(`data:${data.mime};base64,${data.image}`);
-      setRenderStatus("");
+      if (!shirt || !pantsPick) {
+        throw new Error("Model returned an item id that isn't in your wardrobe.");
+      }
+
+      setOutfit({ shirt, pants: pantsPick });
+      setOutfitReasoning(data.reasoning || "");
     } catch (err) {
-      setRenderStatus(err.message || "Render failed");
+      setOutfitMsg(err.message || "Could not generate an outfit.");
+      setOutfit(null);
+    } finally {
+      setGenerating(false);
     }
+  };
+
+  const sendToGemini = async () => {
+    if (!outfit) return;
+    setRenderStatus("");
+
+    const promptText =
+      "Generate a single product photo of a faceless mannequin wearing this shirt and these " +
+      "pants together as a complete outfit, standing against a plain neutral studio background, " +
+      "catalog/e-commerce style lighting, full body, front view. Keep the exact color, pattern, " +
+      "and any logos accurate to these two photos.";
+
+    try {
+      const shirtBlob = await (await fetch(outfit.shirt.dataUrl)).blob();
+      const pantsBlob = await (await fetch(outfit.pants.dataUrl)).blob();
+
+      const shirtFile = new File([shirtBlob], "shirt.jpg", { type: shirtBlob.type });
+      const pantsFile = new File([pantsBlob], "pants.jpg", { type: pantsBlob.type });
+
+      const shareData = {
+        text: promptText,
+        files: [shirtFile, pantsFile],
+      };
+
+      if (navigator.canShare && navigator.canShare(shareData)) {
+        await navigator.share(shareData);
+      } else {
+        setRenderStatus("manual");
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        setRenderStatus("manual");
+      }
+    }
+  };
+
+  const downloadOutfitImage = (dataUrl, filename) => {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = filename;
+    a.click();
   };
 
   const doneCount = items.filter((i) => i.status === "done").length;
@@ -299,6 +327,18 @@ export default function App() {
       </div>
 
       {items.length > 0 && (
+        <div style={styles.styleRow}>
+          <input
+            type="text"
+            placeholder="e.g. old money look, or comfy for college"
+            value={styleRequest}
+            onChange={(e) => setStyleRequest(e.target.value)}
+            style={styles.styleInput}
+          />
+        </div>
+      )}
+
+      {items.length > 0 && (
         <div style={styles.countRow}>
           <span style={styles.countText}>
             {doneCount} of {items.length} tagged
@@ -307,12 +347,12 @@ export default function App() {
             type="button"
             style={{
               ...styles.generateBtn,
-              opacity: hasEnoughForOutfit ? 1 : 0.5,
+              opacity: hasEnoughForOutfit && !generating ? 1 : 0.5,
             }}
             onClick={generateOutfit}
-            disabled={!hasEnoughForOutfit}
+            disabled={!hasEnoughForOutfit || generating}
           >
-            Generate outfit
+            {generating ? "Styling…" : "Generate outfit"}
           </button>
         </div>
       )}
@@ -330,12 +370,49 @@ export default function App() {
             {outfit.shirt.tags.color} {outfit.shirt.tags.pattern} shirt with{" "}
             {outfit.pants.tags.color} {outfit.pants.tags.fit} pants — {outfit.shirt.tags.formality}
           </p>
-          <button type="button" style={styles.renderBtn} onClick={renderOutfitOnMannequin}>
-            Render on mannequin
+          {outfitReasoning && <p style={styles.outfitReasoning}>{outfitReasoning}</p>}
+          <button type="button" style={styles.renderBtn} onClick={sendToGemini}>
+            Send to Gemini
           </button>
-          {renderStatus && <p style={styles.renderStatus}>{renderStatus}</p>}
-          {renderedImg && (
-            <img src={renderedImg} alt="Outfit on mannequin" style={styles.renderedImg} />
+          {renderStatus === "manual" && (
+            <div style={styles.manualBox}>
+              <p style={styles.manualText}>
+                Direct sharing isn't available on this browser. Do it manually instead:
+              </p>
+              <div style={styles.manualBtnRow}>
+                <button
+                  type="button"
+                  style={styles.manualBtn}
+                  onClick={() => downloadOutfitImage(outfit.shirt.dataUrl, "shirt.jpg")}
+                >
+                  Save shirt photo
+                </button>
+                <button
+                  type="button"
+                  style={styles.manualBtn}
+                  onClick={() => downloadOutfitImage(outfit.pants.dataUrl, "pants.jpg")}
+                >
+                  Save pants photo
+                </button>
+              </div>
+              <p style={styles.manualLabel}>Then paste this prompt into a new Gemini chat:</p>
+              <textarea
+                readOnly
+                style={styles.manualPromptBox}
+                value={
+                  "Generate a single product photo of a faceless mannequin wearing this shirt and these pants together as a complete outfit, standing against a plain neutral studio background, catalog/e-commerce style lighting, full body, front view. Keep the exact color, pattern, and any logos accurate to these two photos."
+                }
+                onClick={(e) => e.target.select()}
+              />
+              <a
+                href="https://gemini.google.com/app"
+                target="_blank"
+                rel="noreferrer"
+                style={styles.manualLink}
+              >
+                Open Gemini app
+              </a>
+            </div>
           )}
         </div>
       )}
@@ -501,6 +578,22 @@ const styles = {
     gap: 10,
   },
   countText: { fontSize: 13, color: "#8a867d" },
+  styleRow: { marginBottom: 12 },
+  styleInput: {
+    width: "100%",
+    fontSize: 13,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #d9d4c8",
+    boxSizing: "border-box",
+  },
+  outfitReasoning: {
+    fontSize: 12.5,
+    color: "#6b6862",
+    margin: "8px 0 0",
+    fontStyle: "italic",
+    lineHeight: 1.5,
+  },
   generateBtn: {
     fontSize: 13,
     fontWeight: 500,
@@ -545,6 +638,48 @@ const styles = {
     width: "100%",
   },
   renderStatus: { fontSize: 12, color: "#8a867d", margin: "8px 0 0" },
+  manualBox: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    background: "#faf8f4",
+    border: "1px solid #ece8de",
+  },
+  manualText: { fontSize: 12.5, color: "#6b6862", margin: "0 0 10px" },
+  manualBtnRow: { display: "flex", gap: 8, marginBottom: 10 },
+  manualBtn: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: 500,
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid #d9d4c8",
+    background: "#fff",
+    cursor: "pointer",
+  },
+  manualLabel: { fontSize: 12, color: "#8a867d", margin: "0 0 6px" },
+  manualPromptBox: {
+    width: "100%",
+    fontSize: 12,
+    padding: 10,
+    borderRadius: 8,
+    border: "1px solid #d9d4c8",
+    boxSizing: "border-box",
+    resize: "vertical",
+    minHeight: 90,
+    marginBottom: 10,
+    fontFamily: "inherit",
+  },
+  manualLink: {
+    display: "inline-block",
+    fontSize: 13,
+    fontWeight: 500,
+    color: "#fff",
+    background: "#1f1d1a",
+    padding: "8px 14px",
+    borderRadius: 8,
+    textDecoration: "none",
+  },
   renderedImg: {
     width: "100%",
     borderRadius: 10,
