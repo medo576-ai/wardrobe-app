@@ -238,11 +238,7 @@ export default function App() {
     if (!outfit) return;
     setRenderStatus("");
 
-    const promptText =
-      "Generate a single product photo of a faceless mannequin wearing this shirt and these " +
-      "pants together as a complete outfit, standing against a plain neutral studio background, " +
-      "catalog/e-commerce style lighting, full body, front view. Keep the exact color, pattern, " +
-      "and any logos accurate to these two photos.";
+    const promptText = mannequinPrompt;
 
     try {
       const shirtBlob = await (await fetch(outfit.shirt.dataUrl)).blob();
@@ -273,6 +269,21 @@ export default function App() {
     a.href = dataUrl;
     a.download = filename;
     a.click();
+  };
+
+  const mannequinPrompt =
+    "Generate a single product photo of a faceless mannequin wearing this shirt and these pants " +
+    "together as a complete outfit, standing against a plain neutral studio background, " +
+    "catalog/e-commerce style lighting, full body, front view. Keep the exact color, pattern, " +
+    "and any logos accurate to these two photos.";
+
+  const copyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(mannequinPrompt);
+      setRenderStatus("copied");
+    } catch (e) {
+      setRenderStatus("manual");
+    }
   };
 
   const doneCount = items.filter((i) => i.status === "done").length;
@@ -371,9 +382,19 @@ export default function App() {
             {outfit.pants.tags.color} {outfit.pants.tags.fit} pants — {outfit.shirt.tags.formality}
           </p>
           {outfitReasoning && <p style={styles.outfitReasoning}>{outfitReasoning}</p>}
-          <button type="button" style={styles.renderBtn} onClick={sendToGemini}>
-            Send to Gemini
-          </button>
+          <div style={styles.geminiBtnRow}>
+            <button type="button" style={styles.renderBtn} onClick={sendToGemini}>
+              Send to Gemini
+            </button>
+            <button type="button" style={styles.copyBtn} onClick={copyPrompt}>
+              Copy prompt
+            </button>
+          </div>
+          {renderStatus === "copied" && (
+            <p style={styles.copiedNote}>
+              Prompt copied — paste it into the Gemini chat after the photos land, then hit send.
+            </p>
+          )}
           {renderStatus === "manual" && (
             <div style={styles.manualBox}>
               <p style={styles.manualText}>
@@ -635,8 +656,22 @@ const styles = {
     background: "#1f1d1a",
     color: "#fff",
     cursor: "pointer",
-    width: "100%",
+    flex: 1,
   },
+  geminiBtnRow: { display: "flex", gap: 8 },
+  copyBtn: {
+    marginTop: 10,
+    fontSize: 13,
+    fontWeight: 500,
+    padding: "8px 14px",
+    borderRadius: 10,
+    border: "1px solid #d9d4c8",
+    background: "#fff",
+    color: "#1f1d1a",
+    cursor: "pointer",
+    flex: 1,
+  },
+  copiedNote: { fontSize: 12, color: "#8a867d", margin: "8px 0 0" },
   renderStatus: { fontSize: 12, color: "#8a867d", margin: "8px 0 0" },
   manualBox: {
     marginTop: 12,
