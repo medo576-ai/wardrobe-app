@@ -243,13 +243,17 @@ export default function App() {
     try {
       const shirtBlob = await (await fetch(outfit.shirt.dataUrl)).blob();
       const pantsBlob = await (await fetch(outfit.pants.dataUrl)).blob();
+      const referenceBlob = await (await fetch("/mannequin-reference.jpg")).blob();
 
       const shirtFile = new File([shirtBlob], "shirt.jpg", { type: shirtBlob.type });
       const pantsFile = new File([pantsBlob], "pants.jpg", { type: pantsBlob.type });
+      const referenceFile = new File([referenceBlob], "mannequin-style-reference.jpg", {
+        type: referenceBlob.type,
+      });
 
       const shareData = {
         text: promptText,
-        files: [shirtFile, pantsFile],
+        files: [shirtFile, pantsFile, referenceFile],
       };
 
       if (navigator.canShare && navigator.canShare(shareData)) {
@@ -272,10 +276,12 @@ export default function App() {
   };
 
   const mannequinPrompt =
-    "Generate a single product photo of a faceless mannequin wearing this shirt and these pants " +
-    "together as a complete outfit, standing against a plain neutral studio background, " +
-    "catalog/e-commerce style lighting, full body, front view. Keep the exact color, pattern, " +
-    "and any logos accurate to these two photos.";
+    "I've attached three images: a shirt, a pair of pants, and a reference photo of a mannequin " +
+    "style. Generate a single product photo of that exact same mannequin style (the same head " +
+    "sculpture, pose, and warm grey studio background shown in the reference photo) now wearing " +
+    "the shirt and pants together as a complete outfit, full body, front view, catalog/e-commerce " +
+    "style lighting. Keep the exact color, pattern, and any logos on the shirt and pants accurate " +
+    "to those two photos.";
 
   const copyPrompt = async () => {
     try {
@@ -415,14 +421,21 @@ export default function App() {
                 >
                   Save pants photo
                 </button>
+                <button
+                  type="button"
+                  style={styles.manualBtn}
+                  onClick={() =>
+                    downloadOutfitImage("/mannequin-reference.jpg", "mannequin-reference.jpg")
+                  }
+                >
+                  Save reference photo
+                </button>
               </div>
               <p style={styles.manualLabel}>Then paste this prompt into a new Gemini chat:</p>
               <textarea
                 readOnly
                 style={styles.manualPromptBox}
-                value={
-                  "Generate a single product photo of a faceless mannequin wearing this shirt and these pants together as a complete outfit, standing against a plain neutral studio background, catalog/e-commerce style lighting, full body, front view. Keep the exact color, pattern, and any logos accurate to these two photos."
-                }
+                value={mannequinPrompt}
                 onClick={(e) => e.target.select()}
               />
               <a
