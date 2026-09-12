@@ -109,30 +109,10 @@ export default function App() {
       const [header, base64Data] = item.dataUrl.split(",");
       const mediaType = header.match(/data:(.*);base64/)[1];
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/tag-item", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: mediaType, data: base64Data },
-                },
-                {
-                  type: "text",
-                  text:
-                    "You are a fashion cataloguer. Look at this single garment photo and respond with ONLY a JSON object, no markdown fences, no preamble, in this exact shape: " +
-                    '{"type":"shirt|pants|jacket|shoes|accessory|other","color":"primary color in plain words","pattern":"solid|striped|graphic|plaid|other","formality":"casual|smart-casual|formal","fit":"slim|regular|relaxed|oversized|unknown","notes":"one short phrase on anything distinctive like a logo or text"}',
-                },
-              ],
-            },
-          ],
-        }),
+        body: JSON.stringify({ mediaType, base64Data }),
       });
 
       if (!response.ok) {
@@ -141,10 +121,9 @@ export default function App() {
       }
 
       const data = await response.json();
-      const textBlock = data?.content?.find((b) => b.type === "text");
-      if (!textBlock) throw new Error("No response from tagging model");
+      if (!data.text) throw new Error("No response from tagging model");
 
-      const cleaned = textBlock.text.replace(/```json|```/g, "").trim();
+      const cleaned = data.text.replace(/```json|```/g, "").trim();
       const tags = JSON.parse(cleaned);
 
       setItems((prev) =>
