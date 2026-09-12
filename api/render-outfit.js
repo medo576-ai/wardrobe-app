@@ -23,7 +23,7 @@ export default async function handler(req, res) {
 
   try {
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=" +
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash-image:generateContent?key=" +
         apiKey,
       {
         method: "POST",
@@ -64,3 +64,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message || "Unknown server error" });
   }
 }
+fix model name
