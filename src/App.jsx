@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 
 const STORAGE_KEY = "wardrobe-items-v1";
 const SAVED_OUTFITS_KEY = "wardrobe-saved-outfits-v1";
+const RECENT_PAIRS_KEY = "wardrobe-recent-pairs-v1";
 
 const emptyItem = () => ({
   id: crypto.randomUUID(),
@@ -28,6 +29,24 @@ export default function App() {
   const fileInputRef = useRef(null);
   const savedPhotoInputRef = useRef(null);
   const recentPairsRef = useRef([]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(RECENT_PAIRS_KEY);
+      if (saved) recentPairsRef.current = JSON.parse(saved);
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
+  const recordRecentPair = (shirtId, pantsId) => {
+    recentPairsRef.current = [...recentPairsRef.current, { shirtId, pantsId }].slice(-6);
+    try {
+      localStorage.setItem(RECENT_PAIRS_KEY, JSON.stringify(recentPairsRef.current));
+    } catch (e) {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     try {
@@ -211,9 +230,22 @@ export default function App() {
     handleFiles(e.dataTransfer.files);
   };
 
+  const shuffleArray = (arr) => {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+
   const generateOutfit = async () => {
-    const shirts = items.filter((i) => i.status === "done" && i.tags?.type === "shirt");
-    const pants = items.filter((i) => i.status === "done" && i.tags?.type === "pants");
+    const shirts = shuffleArray(
+      items.filter((i) => i.status === "done" && i.tags?.type === "shirt")
+    );
+    const pants = shuffleArray(
+      items.filter((i) => i.status === "done" && i.tags?.type === "pants")
+    );
 
     if (shirts.length === 0 || pants.length === 0) {
       setOutfitMsg("Add at least one tagged shirt and one tagged pants to generate an outfit.");
@@ -250,10 +282,7 @@ export default function App() {
         throw new Error("Model returned an item id that isn't in your wardrobe.");
       }
 
-      recentPairsRef.current = [
-        ...recentPairsRef.current,
-        { shirtId: shirt.id, pantsId: pantsPick.id },
-      ].slice(-4);
+      recordRecentPair(shirt.id, pantsPick.id);
 
       setOutfit({ shirt, pants: pantsPick });
       setOutfitReasoning(data.reasoning || "");
@@ -311,9 +340,12 @@ export default function App() {
     "specific mannequin figure (same sculptural head, build, and warm grey studio background). " +
     "Generate a single photo of that exact same mannequin figure now wearing the shirt and pants " +
     "together as one outfit, full body, front-facing, natural relaxed standing pose — like a " +
-    "casual 'outfit of the day' photo, not a stiff product-catalog pose showing off the garment " +
-    "for sale. Keep the same studio background and lighting mood as the reference. Keep the exact " +
-    "color, pattern, and any logos on the shirt and pants accurate to those two photos.";
+    "casual 'outfit of the day' photo someone would post, not a stiff product-catalog pose " +
+    "showing off the garment for sale. If the pants have a drawstring, tie, or similar detail, " +
+    "show it worn naturally and tucked in as someone actually wearing the pants would, not " +
+    "dangling loose or visually emphasized like a product close-up. Keep the same studio " +
+    "background and lighting mood as the reference. Keep the exact color, pattern, and any logos " +
+    "on the shirt and pants accurate to those two photos.";
 
   const copyPrompt = async () => {
     try {
