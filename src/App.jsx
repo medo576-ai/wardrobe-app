@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 
 const STORAGE_KEY = "wardrobe-items-v1";
+const SAVED_OUTFITS_KEY = "wardrobe-saved-outfits-v1";
 
 const emptyItem = () => ({
   id: crypto.randomUUID(),
@@ -22,7 +23,31 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("");
   const [renderStatus, setRenderStatus] = useState("");
   const [renderedImg, setRenderedImg] = useState(null);
+  const [savedOutfits, setSavedOutfits] = useState([]);
+  const [savedLoaded, setSavedLoaded] = useState(false);
   const fileInputRef = useRef(null);
+  const savedPhotoInputRef = useRef(null);
+  const recentPairsRef = useRef([]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SAVED_OUTFITS_KEY);
+      if (saved) setSavedOutfits(JSON.parse(saved));
+    } catch (e) {
+      // ignore
+    } finally {
+      setSavedLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!savedLoaded) return;
+    try {
+      localStorage.setItem(SAVED_OUTFITS_KEY, JSON.stringify(savedOutfits));
+    } catch (e) {
+      // ignore, e.g. storage quota
+    }
+  }, [savedOutfits, savedLoaded]);
 
   useEffect(() => {
     try {
@@ -208,8 +233,7 @@ export default function App() {
           shirts: shirts.map((s) => ({ id: s.id, tags: s.tags })),
           pants: pants.map((p) => ({ id: p.id, tags: p.tags })),
           styleRequest,
-          excludeShirtId: outfit?.shirt?.id,
-          excludePantsId: outfit?.pants?.id,
+          recentPairs: recentPairsRef.current,
         }),
       });
 
@@ -225,6 +249,11 @@ export default function App() {
       if (!shirt || !pantsPick) {
         throw new Error("Model returned an item id that isn't in your wardrobe.");
       }
+
+      recentPairsRef.current = [
+        ...recentPairsRef.current,
+        { shirtId: shirt.id, pantsId: pantsPick.id },
+      ].slice(-4);
 
       setOutfit({ shirt, pants: pantsPick });
       setOutfitReasoning(data.reasoning || "");
@@ -278,12 +307,13 @@ export default function App() {
   };
 
   const mannequinPrompt =
-    "I've attached three images: a shirt, a pair of pants, and a reference photo of a mannequin " +
-    "style. Generate a single product photo of that exact same mannequin style (the same head " +
-    "sculpture, pose, and warm grey studio background shown in the reference photo) now wearing " +
-    "the shirt and pants together as a complete outfit, full body, front view, catalog/e-commerce " +
-    "style lighting. Keep the exact color, pattern, and any logos on the shirt and pants accurate " +
-    "to those two photos.";
+    "I've attached three images: a shirt, a pair of pants, and a reference photo showing a " +
+    "specific mannequin figure (same sculptural head, build, and warm grey studio background). " +
+    "Generate a single photo of that exact same mannequin figure now wearing the shirt and pants " +
+    "together as one outfit, full body, front-facing, natural relaxed standing pose — like a " +
+    "casual 'outfit of the day' photo, not a stiff product-catalog pose showing off the garment " +
+    "for sale. Keep the same studio background and lighting mood as the reference. Keep the exact " +
+    "color, pattern, and any logos on the shirt and pants accurate to those two photos.";
 
   const copyPrompt = async () => {
     try {
@@ -292,6 +322,37 @@ export default function App() {
     } catch (e) {
       setRenderStatus("manual");
     }
+  };
+
+  const saveCurrentOutfit = () => {
+    if (!outfit) return;
+    const entry = {
+      id: crypto.randomUUID(),
+      savedAt: new Date().toISOString(),
+      shirtDataUrl: outfit.shirt.dataUrl,
+      pantsDataUrl: outfit.pants.dataUrl,
+      shirtTags: outfit.shirt.tags,
+      pantsTags: outfit.pants.tags,
+      styleRequest,
+      reasoning: outfitReasoning,
+      generatedPhoto: null,
+    };
+    setSavedOutfits((prev) => [entry, ...prev]);
+    setRenderStatus("saved");
+  };
+
+  const removeSavedOutfit = (id) => {
+    setSavedOutfits((prev) => prev.filter((o) => o.id !== id));
+  };
+
+  const attachGeneratedPhoto = (id, file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSavedOutfits((prev) =>
+        prev.map((o) => (o.id === id ? { ...o, generatedPhoto: reader.result } : o))
+      );
+    };
+    reader.readAsDataURL(file);
   };
 
   const doneCount = items.filter((i) => i.status === "done").length;
@@ -450,6 +511,62 @@ export default function App() {
               </a>
             </div>
           )}
+          <button type="button" style={styles.saveFitBtn} onClick={saveCurrentOutfit}>
+            ★ Save this fit
+          </button>
+          {renderStatus === "saved" && (
+            <p style={styles.copiedNote}>
+              Saved. Once you get the Gemini render back, attach it below in Saved fits.
+            </p>
+          )}
+        </div>
+      )}
+
+      {savedOutfits.length > 0 && (
+        <div style={styles.savedSection}>
+          <p style={styles.savedHeading}>Saved fits</p>
+          <div style={styles.savedGrid}>
+            {savedOutfits.map((o) => (
+              <div key={o.id} style={styles.savedCard}>
+                <button
+                  type="button"
+                  style={styles.savedRemoveBtn}
+                  onClick={() => removeSavedOutfit(o.id)}
+                >
+                  ×
+                </button>
+                {o.generatedPhoto ? (
+                  <img src={o.generatedPhoto} alt="Generated fit" style={styles.savedPhoto} />
+                ) : (
+                  <div style={styles.savedPair}>
+                    <img src={o.shirtDataUrl} alt="shirt" style={styles.savedPairImg} />
+                    <img src={o.pantsDataUrl} alt="pants" style={styles.savedPairImg} />
+                  </div>
+                )}
+                <p style={styles.savedDetail}>
+                  {o.shirtTags?.color} {o.shirtTags?.pattern} + {o.pantsTags?.color}{" "}
+                  {o.pantsTags?.fit}
+                </p>
+                {o.styleRequest && <p style={styles.savedStyleTag}>"{o.styleRequest}"</p>}
+                {!o.generatedPhoto && (
+                  <>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id={`saved-photo-${o.id}`}
+                      style={styles.hiddenInput}
+                      onChange={(e) =>
+                        e.target.files[0] && attachGeneratedPhoto(o.id, e.target.files[0])
+                      }
+                    />
+                    <label htmlFor={`saved-photo-${o.id}`} style={styles.savedAttachBtn}>
+                      Attach Gemini photo
+                    </label>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -553,6 +670,81 @@ function TagInput({ label, value, onChange }) {
 }
 
 const styles = {
+  saveFitBtn: {
+    marginTop: 10,
+    width: "100%",
+    fontSize: 13,
+    fontWeight: 500,
+    padding: "8px 14px",
+    borderRadius: 10,
+    border: "1px solid #d9d4c8",
+    background: "#fff",
+    color: "#1f1d1a",
+    cursor: "pointer",
+  },
+  savedSection: { marginTop: 28 },
+  savedHeading: { fontSize: 15, fontWeight: 500, margin: "0 0 12px" },
+  savedGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(2, 1fr)",
+    gap: 12,
+  },
+  savedCard: {
+    position: "relative",
+    background: "#fff",
+    borderRadius: 12,
+    border: "1px solid #ece8de",
+    padding: 10,
+  },
+  savedRemoveBtn: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: "50%",
+    border: "none",
+    background: "rgba(0,0,0,0.55)",
+    color: "#fff",
+    fontSize: 14,
+    lineHeight: "22px",
+    cursor: "pointer",
+    padding: 0,
+    zIndex: 1,
+  },
+  savedPair: { display: "flex", gap: 4, marginBottom: 8 },
+  savedPairImg: {
+    width: "50%",
+    aspectRatio: "1 / 1",
+    objectFit: "cover",
+    borderRadius: 8,
+  },
+  savedPhoto: {
+    width: "100%",
+    aspectRatio: "3 / 4",
+    objectFit: "cover",
+    borderRadius: 8,
+    marginBottom: 8,
+    display: "block",
+  },
+  savedDetail: { fontSize: 11.5, textTransform: "capitalize", margin: "0 0 4px" },
+  savedStyleTag: {
+    fontSize: 11,
+    color: "#8a867d",
+    fontStyle: "italic",
+    margin: "0 0 8px",
+  },
+  savedAttachBtn: {
+    display: "block",
+    textAlign: "center",
+    fontSize: 11.5,
+    fontWeight: 500,
+    padding: "6px 8px",
+    borderRadius: 8,
+    border: "1px solid #d9d4c8",
+    background: "#faf8f4",
+    cursor: "pointer",
+  },
   page: {
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     maxWidth: 720,
