@@ -15,7 +15,7 @@ export default async function handler(req, res) {
 
   const prompt =
     "You are a fashion cataloguer. Look at this single garment photo and respond with ONLY a JSON object, no markdown fences, no preamble, in this exact shape: " +
-    '{"type":"shirt|pants|jacket|shoes|accessory|other","color":"primary color in plain words","pattern":"solid|striped|graphic|plaid|other","formality":"casual|smart-casual|formal","fit":"slim|regular|relaxed|oversized|unknown","notes":"one short phrase on anything distinctive like a logo or text"}';
+    '{"type":"shirt|pants|belt|watch|shoes|jacket|accessory|other","color":"primary color in plain words","pattern":"solid|striped|graphic|plaid|other","formality":"casual|smart-casual|formal","fit":"slim|regular|relaxed|oversized|unknown","notes":"one short phrase on anything distinctive like a logo or text"}';
 
   try {
     const response = await fetch(

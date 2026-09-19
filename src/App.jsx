@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from "react";
 const STORAGE_KEY = "wardrobe-items-v1";
 const SAVED_OUTFITS_KEY = "wardrobe-saved-outfits-v1";
 const RECENT_PAIRS_KEY = "wardrobe-recent-pairs-v1";
+const USED_COMBOS_KEY = "wardrobe-used-combos-v1";
 
 const emptyItem = () => ({
   id: crypto.randomUUID(),
@@ -28,24 +29,41 @@ export default function App() {
   const [savedLoaded, setSavedLoaded] = useState(false);
   const fileInputRef = useRef(null);
   const savedPhotoInputRef = useRef(null);
-  const recentPairsRef = useRef([]);
+  const usedCombosRef = useRef([]);
+  const [page, setPage] = useState("closet");
+  const [historyCount, setHistoryCount] = useState(0);
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(RECENT_PAIRS_KEY);
-      if (saved) recentPairsRef.current = JSON.parse(saved);
+      const saved = localStorage.getItem(USED_COMBOS_KEY);
+      if (saved) {
+        usedCombosRef.current = JSON.parse(saved);
+        setHistoryCount(usedCombosRef.current.length);
+      }
     } catch (e) {
       // ignore
     }
   }, []);
 
-  const recordRecentPair = (shirtId, pantsId) => {
-    recentPairsRef.current = [...recentPairsRef.current, { shirtId, pantsId }].slice(-6);
+  const recordUsedCombo = (key) => {
+    usedCombosRef.current = [...usedCombosRef.current, key];
+    setHistoryCount(usedCombosRef.current.length);
     try {
-      localStorage.setItem(RECENT_PAIRS_KEY, JSON.stringify(recentPairsRef.current));
+      localStorage.setItem(USED_COMBOS_KEY, JSON.stringify(usedCombosRef.current));
     } catch (e) {
       // ignore
     }
+  };
+
+  const resetComboHistory = () => {
+    usedCombosRef.current = [];
+    setHistoryCount(0);
+    try {
+      localStorage.removeItem(USED_COMBOS_KEY);
+    } catch (e) {
+      // ignore
+    }
+    setOutfitMsg("History cleared — all combinations are available again.");
   };
 
   useEffect(() => {
@@ -239,13 +257,18 @@ export default function App() {
     return copy;
   };
 
+  const comboKey = (o) =>
+    [o.shirtId, o.pantsId, o.beltId || "-", o.watchId || "-", o.shoesId || "-"].join("|");
+
   const generateOutfit = async () => {
-    const shirts = shuffleArray(
-      items.filter((i) => i.status === "done" && i.tags?.type === "shirt")
-    );
-    const pants = shuffleArray(
-      items.filter((i) => i.status === "done" && i.tags?.type === "pants")
-    );
+    const pick = (type) =>
+      shuffleArray(items.filter((i) => i.status === "done" && i.tags?.type === type));
+
+    const shirts = pick("shirt");
+    const pants = pick("pants");
+    const belts = pick("belt");
+    const watches = pick("watch");
+    const shoes = pick("shoes");
 
     if (shirts.length === 0 || pants.length === 0) {
       setOutfitMsg("Add at least one tagged shirt and one tagged pants to generate an outfit.");
@@ -257,35 +280,78 @@ export default function App() {
     setOutfitMsg("");
     setOutfitReasoning("");
 
+    const slim = (arr) => arr.map((i) => ({ id: i.id, tags: i.tags }));
+    const findById = (arr, id) => (id ? arr.find((i) => i.id === id) || null : null);
+
     try {
-      const response = await fetch("/api/style-outfit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shirts: shirts.map((s) => ({ id: s.id, tags: s.tags })),
-          pants: pants.map((p) => ({ id: p.id, tags: p.tags })),
-          styleRequest,
-          recentPairs: recentPairsRef.current,
-        }),
-      });
+      let chosen = null;
+      let reasoning = "";
+      let exhausted = false;
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Styling failed (${response.status}): ${errText.slice(0, 200)}`);
+      // Try up to 3 times to get a combo we haven't shown before.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await fetch("/api/style-outfit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shirts: slim(shirts),
+            pants: slim(pants),
+            belts: slim(belts),
+            watches: slim(watches),
+            shoes: slim(shoes),
+            styleRequest,
+            usedCombos: usedCombosRef.current,
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Styling failed (${response.status}): ${errText.slice(0, 200)}`);
+        }
+
+        const data = await response.json();
+        const shirt = findById(shirts, data.shirtId);
+        const pantsPick = findById(pants, data.pantsId);
+
+        if (!shirt || !pantsPick) {
+          throw new Error("Model returned an item id that isn't in your wardrobe.");
+        }
+
+        const key = comboKey(data);
+        exhausted = Boolean(data.exhausted);
+
+        if (!usedCombosRef.current.includes(key) || exhausted) {
+          chosen = {
+            shirt,
+            pants: pantsPick,
+            belt: findById(belts, data.beltId),
+            watch: findById(watches, data.watchId),
+            shoes: findById(shoes, data.shoesId),
+            key,
+          };
+          reasoning = data.reasoning || "";
+          break;
+        }
       }
 
-      const data = await response.json();
-      const shirt = shirts.find((s) => s.id === data.shirtId);
-      const pantsPick = pants.find((p) => p.id === data.pantsId);
-
-      if (!shirt || !pantsPick) {
-        throw new Error("Model returned an item id that isn't in your wardrobe.");
+      if (!chosen) {
+        setOutfitMsg(
+          "Couldn't find a new combination — you've seen every outfit this wardrobe can make. Add more items, or reset the history below."
+        );
+        setGenerating(false);
+        return;
       }
 
-      recordRecentPair(shirt.id, pantsPick.id);
+      if (!exhausted) {
+        recordUsedCombo(chosen.key);
+      } else {
+        setOutfitMsg(
+          "You've now seen every combination this wardrobe can make — showing a repeat. Add more items for fresh outfits."
+        );
+      }
 
-      setOutfit({ shirt, pants: pantsPick });
-      setOutfitReasoning(data.reasoning || "");
+      setOutfit(chosen);
+      setOutfitReasoning(reasoning);
     } catch (err) {
       setOutfitMsg(err.message || "Could not generate an outfit.");
       setOutfit(null);
@@ -301,20 +367,23 @@ export default function App() {
     const promptText = mannequinPrompt;
 
     try {
-      const shirtBlob = await (await fetch(outfit.shirt.dataUrl)).blob();
-      const pantsBlob = await (await fetch(outfit.pants.dataUrl)).blob();
-      const referenceBlob = await (await fetch("/mannequin-reference.jpg")).blob();
-
-      const shirtFile = new File([shirtBlob], "shirt.jpg", { type: shirtBlob.type });
-      const pantsFile = new File([pantsBlob], "pants.jpg", { type: pantsBlob.type });
-      const referenceFile = new File([referenceBlob], "mannequin-style-reference.jpg", {
-        type: referenceBlob.type,
-      });
-
-      const shareData = {
-        text: promptText,
-        files: [shirtFile, pantsFile, referenceFile],
+      const toFile = async (dataUrl, name) => {
+        const blob = await (await fetch(dataUrl)).blob();
+        return new File([blob], name, { type: blob.type });
       };
+
+      const files = [
+        await toFile(outfit.shirt.dataUrl, "shirt.jpg"),
+        await toFile(outfit.pants.dataUrl, "pants.jpg"),
+      ];
+
+      if (outfit.belt) files.push(await toFile(outfit.belt.dataUrl, "belt.jpg"));
+      if (outfit.watch) files.push(await toFile(outfit.watch.dataUrl, "watch.jpg"));
+      if (outfit.shoes) files.push(await toFile(outfit.shoes.dataUrl, "shoes.jpg"));
+
+      files.push(await toFile("/mannequin-reference.jpg", "mannequin-style-reference.jpg"));
+
+      const shareData = { text: promptText, files };
 
       if (navigator.canShare && navigator.canShare(shareData)) {
         await navigator.share(shareData);
@@ -336,16 +405,17 @@ export default function App() {
   };
 
   const mannequinPrompt =
-    "I've attached three images: a shirt, a pair of pants, and a reference photo showing a " +
-    "specific mannequin figure (same sculptural head, build, and warm grey studio background). " +
-    "Generate a single photo of that exact same mannequin figure now wearing the shirt and pants " +
-    "together as one outfit, full body, front-facing, natural relaxed standing pose — like a " +
-    "casual 'outfit of the day' photo someone would post, not a stiff product-catalog pose " +
-    "showing off the garment for sale. If the pants have a drawstring, tie, or similar detail, " +
-    "show it worn naturally and tucked in as someone actually wearing the pants would, not " +
-    "dangling loose or visually emphasized like a product close-up. Keep the same studio " +
-    "background and lighting mood as the reference. Keep the exact color, pattern, and any logos " +
-    "on the shirt and pants accurate to those two photos.";
+    "I've attached photos of an outfit — a shirt, a pair of pants, and possibly a belt, a watch, " +
+    "and shoes — plus a final reference photo showing a specific mannequin figure (same " +
+    "sculptural head, build, and warm grey studio background). Generate a single photo of that " +
+    "exact same mannequin figure wearing all the attached garments and accessories together as " +
+    "one complete outfit, full body, front-facing, natural relaxed standing pose — like a casual " +
+    "'outfit of the day' photo someone would post, not a stiff product-catalog pose showing off " +
+    "the garment for sale. If the pants have a drawstring, tie, or similar detail, show it worn " +
+    "naturally and tucked in as someone actually wearing the pants would, not dangling loose or " +
+    "visually emphasized like a product close-up. Keep the same studio background and lighting " +
+    "mood as the reference. Keep the exact color, pattern, and any logos on each item accurate " +
+    "to the attached photos.";
 
   const copyPrompt = async () => {
     try {
@@ -363,6 +433,9 @@ export default function App() {
       savedAt: new Date().toISOString(),
       shirtDataUrl: outfit.shirt.dataUrl,
       pantsDataUrl: outfit.pants.dataUrl,
+      beltDataUrl: outfit.belt?.dataUrl || null,
+      watchDataUrl: outfit.watch?.dataUrl || null,
+      shoesDataUrl: outfit.shoes?.dataUrl || null,
       shirtTags: outfit.shirt.tags,
       pantsTags: outfit.pants.tags,
       styleRequest,
@@ -397,8 +470,8 @@ export default function App() {
       <div style={styles.header}>
         <h1 style={styles.h1}>Wardrobe closet</h1>
         <p style={styles.sub}>
-          Upload photos of your shirts and pants. Each item gets auto-tagged, then
-          you can generate a matching outfit.
+          Upload photos of your clothes. Each item gets auto-tagged, then you can
+          generate a matching outfit.
         </p>
         {saveStatus && <p style={styles.saveStatus}>{saveStatus}</p>}
         <div style={styles.backupRow}>
@@ -418,6 +491,25 @@ export default function App() {
         </div>
       </div>
 
+      <div style={styles.tabRow}>
+        <button
+          type="button"
+          style={page === "closet" ? styles.tabActive : styles.tab}
+          onClick={() => setPage("closet")}
+        >
+          Closet
+        </button>
+        <button
+          type="button"
+          style={page === "saved" ? styles.tabActive : styles.tab}
+          onClick={() => setPage("saved")}
+        >
+          Saved fits{savedOutfits.length > 0 ? ` (${savedOutfits.length})` : ""}
+        </button>
+      </div>
+
+      {page === "closet" && (
+      <>
       <div style={styles.dropzone} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
         <p style={styles.dropText}>Drop photos here or tap the button below</p>
         <p style={styles.dropSub}>Rough photos are fine — background clutter is okay for now</p>
@@ -477,6 +569,15 @@ export default function App() {
           <div style={styles.outfitRow}>
             <img src={outfit.shirt.dataUrl} alt="shirt" style={styles.outfitImg} />
             <img src={outfit.pants.dataUrl} alt="pants" style={styles.outfitImg} />
+            {outfit.belt && (
+              <img src={outfit.belt.dataUrl} alt="belt" style={styles.outfitImg} />
+            )}
+            {outfit.watch && (
+              <img src={outfit.watch.dataUrl} alt="watch" style={styles.outfitImg} />
+            )}
+            {outfit.shoes && (
+              <img src={outfit.shoes.dataUrl} alt="shoes" style={styles.outfitImg} />
+            )}
           </div>
           <p style={styles.outfitDetail}>
             {outfit.shirt.tags.color} {outfit.shirt.tags.pattern} shirt with{" "}
@@ -548,15 +649,35 @@ export default function App() {
           </button>
           {renderStatus === "saved" && (
             <p style={styles.copiedNote}>
-              Saved. Once you get the Gemini render back, attach it below in Saved fits.
+              Saved — find it on the Saved fits tab to attach the Gemini render.
             </p>
           )}
         </div>
       )}
 
-      {savedOutfits.length > 0 && (
+      {historyCount > 0 && (
+        <div style={styles.historyRow}>
+          <span style={styles.historyText}>
+            {historyCount} outfit{historyCount === 1 ? "" : "s"} already generated
+          </span>
+          <button type="button" style={styles.historyBtn} onClick={resetComboHistory}>
+            Reset history
+          </button>
+        </div>
+      )}
+      </>
+      )}
+
+      {page === "saved" && savedOutfits.length === 0 && (
+        <div style={styles.empty}>
+          <p style={styles.emptyText}>
+            No saved fits yet. Generate an outfit and tap ★ Save this fit.
+          </p>
+        </div>
+      )}
+
+      {page === "saved" && savedOutfits.length > 0 && (
         <div style={styles.savedSection}>
-          <p style={styles.savedHeading}>Saved fits</p>
           <div style={styles.savedGrid}>
             {savedOutfits.map((o) => (
               <div key={o.id} style={styles.savedCard}>
@@ -602,6 +723,7 @@ export default function App() {
         </div>
       )}
 
+      {page === "closet" && (
       <div style={styles.grid}>
         {items.map((item) => (
           <div key={item.id} style={styles.card}>
@@ -629,7 +751,16 @@ export default function App() {
                   <TagSelect
                     label="Type"
                     value={item.tags.type}
-                    options={["shirt", "pants", "jacket", "shoes", "accessory", "other"]}
+                    options={[
+                      "shirt",
+                      "pants",
+                      "belt",
+                      "watch",
+                      "shoes",
+                      "jacket",
+                      "accessory",
+                      "other",
+                    ]}
                     onChange={(v) => updateTag(item.id, "type", v)}
                   />
                   <TagInput
@@ -662,8 +793,9 @@ export default function App() {
           </div>
         ))}
       </div>
+      )}
 
-      {items.length === 0 && loaded && (
+      {page === "closet" && items.length === 0 && loaded && (
         <div style={styles.empty}>
           <p style={styles.emptyText}>Your closet is empty. Add a few items to start.</p>
         </div>
@@ -702,6 +834,49 @@ function TagInput({ label, value, onChange }) {
 }
 
 const styles = {
+  tabRow: { display: "flex", gap: 8, marginBottom: 18 },
+  tab: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: 500,
+    padding: "9px 12px",
+    borderRadius: 10,
+    border: "1px solid #ece8de",
+    background: "#fff",
+    color: "#8a867d",
+    cursor: "pointer",
+  },
+  tabActive: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: 500,
+    padding: "9px 12px",
+    borderRadius: 10,
+    border: "1px solid #1f1d1a",
+    background: "#1f1d1a",
+    color: "#fff",
+    cursor: "pointer",
+  },
+  historyRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 18,
+    padding: "10px 12px",
+    borderRadius: 10,
+    background: "#fff",
+    border: "1px solid #ece8de",
+  },
+  historyText: { fontSize: 12, color: "#8a867d" },
+  historyBtn: {
+    fontSize: 12,
+    fontWeight: 500,
+    padding: "5px 10px",
+    borderRadius: 8,
+    border: "1px solid #d9d4c8",
+    background: "#faf8f4",
+    cursor: "pointer",
+  },
   saveFitBtn: {
     marginTop: 10,
     width: "100%",
